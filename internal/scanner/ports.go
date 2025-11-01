@@ -97,7 +97,7 @@ func scanPortsConcurrent(target string, ports []int) []PortInfo {
 	var portInfos []PortInfo
 
 	// Use a worker pool to limit concurrent connections
-	workers := 100
+	workers := 500
 	portChan := make(chan int, len(ports))
 
 	// Start workers
@@ -127,7 +127,7 @@ func scanPortsConcurrent(target string, ports []int) []PortInfo {
 
 // scanPort scans a single port and grabs banner if open
 func scanPort(host string, port int) *PortInfo {
-	timeout := 2 * time.Second
+	timeout := 1 * time.Second
 	address := fmt.Sprintf("%s:%d", host, port)
 
 	conn, err := net.DialTimeout("tcp", address, timeout)
@@ -154,7 +154,7 @@ func scanPort(host string, port int) *PortInfo {
 // grabBanner attempts to read a banner from an open connection
 func grabBanner(conn net.Conn, port int) string {
 	// Set read deadline
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 
 	// For some services, we need to send data first
 	switch port {

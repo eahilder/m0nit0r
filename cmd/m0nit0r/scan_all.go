@@ -123,13 +123,15 @@ var scanAllCmd = &cobra.Command{
 			fmt.Printf("[%d/%d] %s (%s)\n", assetNum, len(assets), asset.Value, asset.AssetType)
 
 			// Port scan (all asset types)
+			openPorts := 0
 			if scanType == "all" || scanType == "ports" {
-				scanPortsForAsset(asset, portScanType, summary)
+				openPorts = scanPortsForAsset(asset, portScanType, summary)
 			}
 
-			// Tech scan (domains and subdomains)
+			// Tech scan (domains and subdomains) - only if ports were found
 			if (scanType == "all" || scanType == "tech") &&
-				(asset.AssetType == models.AssetTypeDomain || asset.AssetType == models.AssetTypeSubdomain) {
+				(asset.AssetType == models.AssetTypeDomain || asset.AssetType == models.AssetTypeSubdomain) &&
+				openPorts > 0 {
 				scanTechForAsset(asset, summary)
 			}
 
@@ -455,12 +457,12 @@ func scanSubdomainForAsset(asset models.Asset, summary *ScanSummary) {
 	database.SaveScanResult(asset.ID, models.ScanTypeSubdomain, jsonData)
 }
 
-func scanPortsForAsset(asset models.Asset, scanType string, summary *ScanSummary) {
+func scanPortsForAsset(asset models.Asset, scanType string, summary *ScanSummary) int {
 	result, err := scanner.ScanPorts(asset.Value, scanType)
 	if err != nil {
 		summary.Errors = append(summary.Errors, fmt.Sprintf("%s - port scan error: %v", asset.Value, err))
 		fmt.Printf("  → Port scan: Error - %v\n", err)
-		return
+		return 0
 	}
 
 	summary.PortScans++
@@ -543,6 +545,8 @@ func scanPortsForAsset(asset models.Asset, scanType string, summary *ScanSummary
 	// Save to database
 	jsonData, _ := result.ToJSON()
 	database.SaveScanResult(asset.ID, models.ScanTypePort, jsonData)
+
+	return len(result.Ports)
 }
 
 func scanTechForAsset(asset models.Asset, summary *ScanSummary) {
