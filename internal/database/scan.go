@@ -73,6 +73,38 @@ func HasClientBaseline(clientID int64) (bool, error) {
 	return count > 0, nil
 }
 
+// HasScanTypeBaseline checks if a specific scan type has been baselined for a client
+func HasScanTypeBaseline(clientID int64, scanType string) (bool, error) {
+	var count int64
+
+	// Map scan types to change type patterns
+	var pattern string
+	switch scanType {
+	case "subdomains":
+		pattern = "baseline_subdomain%"
+	case "ports":
+		pattern = "baseline_port%"
+	case "credentials":
+		pattern = "baseline_credential%"
+	case "tech":
+		pattern = "baseline_tech%"
+	default:
+		// For "all" or unknown, check any baseline
+		return HasClientBaseline(clientID)
+	}
+
+	err := DB.Model(&models.Change{}).
+		Where("(client_id = ? OR asset_id IN (SELECT id FROM assets WHERE client_id = ?)) AND change_type LIKE ?",
+			clientID, clientID, pattern).
+		Count(&count).Error
+
+	if err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
+}
+
 // ListChanges retrieves changes with optional filters
 func ListChanges(clientID *int64, assetID *int64, unnotifiedOnly bool) ([]models.Change, error) {
 	var changes []models.Change

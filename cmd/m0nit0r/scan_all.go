@@ -59,20 +59,58 @@ var scanAllCmd = &cobra.Command{
 			}
 		}
 
-		// Check if client has been baselined
-		isBaseline, err := database.HasClientBaseline(clientID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to check baseline status: %v\n", err)
-			os.Exit(1)
+		// Check baseline status per scan type
+		isSubdomainBaseline := false
+		isPortBaseline := false
+		isCredentialBaseline := false
+		isTechBaseline := false
+
+		if scanType == "all" || scanType == "subdomains" {
+			hasBaseline, err := database.HasScanTypeBaseline(clientID, "subdomains")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to check subdomain baseline status: %v\n", err)
+				os.Exit(1)
+			}
+			isSubdomainBaseline = !hasBaseline
+		}
+
+		if scanType == "all" || scanType == "ports" {
+			hasBaseline, err := database.HasScanTypeBaseline(clientID, "ports")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to check port baseline status: %v\n", err)
+				os.Exit(1)
+			}
+			isPortBaseline = !hasBaseline
+		}
+
+		if scanType == "all" || scanType == "credentials" {
+			hasBaseline, err := database.HasScanTypeBaseline(clientID, "credentials")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to check credential baseline status: %v\n", err)
+				os.Exit(1)
+			}
+			isCredentialBaseline = !hasBaseline
+		}
+
+		if scanType == "all" || scanType == "tech" {
+			hasBaseline, err := database.HasScanTypeBaseline(clientID, "tech")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to check tech baseline status: %v\n", err)
+				os.Exit(1)
+			}
+			isTechBaseline = !hasBaseline
 		}
 
 		// Initialize summary
+		// IsBaseline is true if ANY scan type is being baselined
+		isAnyBaseline := isSubdomainBaseline || isPortBaseline || isCredentialBaseline || isTechBaseline
+
 		summary := &ScanSummary{
 			ClientName: client.Name,
 			ClientID:   clientID,
 			StartTime:  time.Now(),
 			Assets:     len(assets),
-			IsBaseline: !isBaseline, // First scan if no baseline exists
+			IsBaseline: isAnyBaseline,
 		}
 
 		// Count asset types
@@ -128,11 +166,17 @@ var scanAllCmd = &cobra.Command{
 				openPorts = scanPortsForAsset(asset, portScanType, summary)
 			}
 
-			// Tech scan (domains and subdomains) - only if ports were found
-			if (scanType == "all" || scanType == "tech") &&
-				(asset.AssetType == models.AssetTypeDomain || asset.AssetType == models.AssetTypeSubdomain) &&
-				openPorts > 0 {
-				scanTechForAsset(asset, summary)
+			// Tech scan (domains and subdomains)
+			// - If explicitly requested (scanType == "tech"), always run
+			// - If part of "all" scan, only run if ports were found
+			if (asset.AssetType == models.AssetTypeDomain || asset.AssetType == models.AssetTypeSubdomain) {
+				if scanType == "tech" {
+					// Explicit tech scan - always run
+					scanTechForAsset(asset, summary)
+				} else if scanType == "all" && openPorts > 0 {
+					// Part of "all" scan - only run if ports are open
+					scanTechForAsset(asset, summary)
+				}
 			}
 
 			fmt.Println() // Blank line between assets
@@ -148,51 +192,64 @@ var scanAllCmd = &cobra.Command{
 		summary.EndTime = time.Now()
 		summary.Duration = summary.EndTime.Sub(summary.StartTime)
 
-		// Record baseline summaries if this is the first scan for this client
-		if summary.IsBaseline {
-			if summary.SubdomainScans > 0 {
-				desc := fmt.Sprintf("Baseline subdomain enumeration: %d subdomains discovered across %d domains",
-					summary.TotalSubdomains, summary.SubdomainScans)
-				database.RecordClientChange(clientID, "baseline_subdomain", desc, "info")
+		// Record baseline summaries for each scan type independently
+		if isSubdomainBaseline && summary.SubdomainScans > 0 {
+			desc := fmt.Sprintf("Baseline subdomain enumeration: %d subdomains discovered across %d domains",
+				summary.TotalSubdomains, summary.SubdomainScans)
+			database.RecordClientChange(clientID, "baseline_subdomain", desc, "info")
 
-				// Track in summary
-				summary.Changes = append(summary.Changes, ChangeEvent{
-					ClientID:    &clientID,
-					ChangeType:  "baseline_subdomain",
-					Description: desc,
-					Severity:    "info",
-					Timestamp:   time.Now().Format(time.RFC3339),
-				})
-			}
+			// Track in summary
+			summary.Changes = append(summary.Changes, ChangeEvent{
+				ClientID:    &clientID,
+				ChangeType:  "baseline_subdomain",
+				Description: desc,
+				Severity:    "info",
+				Timestamp:   time.Now().Format(time.RFC3339),
+			})
+		}
 
-			if summary.PortScans > 0 {
-				desc := fmt.Sprintf("Baseline port scan: %d total open ports across %d assets",
-					summary.TotalOpenPorts, summary.AssetsWithOpenPorts)
-				database.RecordClientChange(clientID, "baseline_portscan", desc, "info")
+		if isPortBaseline && summary.PortScans > 0 {
+			desc := fmt.Sprintf("Baseline port scan: %d total open ports across %d assets",
+				summary.TotalOpenPorts, summary.AssetsWithOpenPorts)
+			database.RecordClientChange(clientID, "baseline_portscan", desc, "info")
 
-				// Track in summary
-				summary.Changes = append(summary.Changes, ChangeEvent{
-					ClientID:    &clientID,
-					ChangeType:  "baseline_portscan",
-					Description: desc,
-					Severity:    "info",
-					Timestamp:   time.Now().Format(time.RFC3339),
-				})
-			}
+			// Track in summary
+			summary.Changes = append(summary.Changes, ChangeEvent{
+				ClientID:    &clientID,
+				ChangeType:  "baseline_portscan",
+				Description: desc,
+				Severity:    "info",
+				Timestamp:   time.Now().Format(time.RFC3339),
+			})
+		}
 
-			if summary.TechScansSuccess > 0 {
-				desc := fmt.Sprintf("Baseline tech stack detection: %d assets scanned", summary.TechScansSuccess)
-				database.RecordClientChange(clientID, "baseline_tech", desc, "info")
+		if isTechBaseline && summary.TechScansSuccess > 0 {
+			desc := fmt.Sprintf("Baseline tech stack detection: %d assets scanned", summary.TechScansSuccess)
+			database.RecordClientChange(clientID, "baseline_tech", desc, "info")
 
-				// Track in summary
-				summary.Changes = append(summary.Changes, ChangeEvent{
-					ClientID:    &clientID,
-					ChangeType:  "baseline_tech",
-					Description: desc,
-					Severity:    "info",
-					Timestamp:   time.Now().Format(time.RFC3339),
-				})
-			}
+			// Track in summary
+			summary.Changes = append(summary.Changes, ChangeEvent{
+				ClientID:    &clientID,
+				ChangeType:  "baseline_tech",
+				Description: desc,
+				Severity:    "info",
+				Timestamp:   time.Now().Format(time.RFC3339),
+			})
+		}
+
+		if isCredentialBaseline && (summary.TotalBreachedEmails > 0 || summary.TotalBreachedPasswords > 0 || summary.TotalBreachedHashes > 0) {
+			desc := fmt.Sprintf("Baseline credential breach scan: %d emails, %d passwords, %d hashes found",
+				summary.TotalBreachedEmails, summary.TotalBreachedPasswords, summary.TotalBreachedHashes)
+			database.RecordClientChange(clientID, "baseline_credential", desc, "info")
+
+			// Track in summary
+			summary.Changes = append(summary.Changes, ChangeEvent{
+				ClientID:    &clientID,
+				ChangeType:  "baseline_credential",
+				Description: desc,
+				Severity:    "info",
+				Timestamp:   time.Now().Format(time.RFC3339),
+			})
 		}
 
 		// Save changes as JSON
