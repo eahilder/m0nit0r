@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -61,6 +63,16 @@ var historyClientCmd = &cobra.Command{
 			ClosedPorts     int             `json:"closed_ports"`
 			Credentials     int             `json:"credentials"`
 			Changes         []models.Change `json:"changes,omitempty"`
+
+			// Baseline-specific fields
+			TotalSubdomains      int `json:"total_subdomains,omitempty"`
+			DomainsScanned       int `json:"domains_scanned,omitempty"`
+			TotalOpenPorts       int `json:"total_open_ports,omitempty"`
+			AssetsWithOpenPorts  int `json:"assets_with_open_ports,omitempty"`
+			TechScansSuccess     int `json:"tech_scans_success,omitempty"`
+			TotalBreachedEmails  int `json:"total_breached_emails,omitempty"`
+			TotalBreachedPwds    int `json:"total_breached_passwords,omitempty"`
+			TotalBreachedHashes  int `json:"total_breached_hashes,omitempty"`
 		}
 
 		var sessions []ScanSession
@@ -96,6 +108,28 @@ var historyClientCmd = &cobra.Command{
 			for _, change := range sessions[i].Changes {
 				if strings.HasPrefix(change.ChangeType, "baseline_") {
 					baseline++
+					// Parse baseline description to extract detailed metrics
+					metrics := parseBaselineDescription(change.ChangeType, change.Description)
+					for key, value := range metrics {
+						switch key {
+						case "total_subdomains":
+							sessions[i].TotalSubdomains = value
+						case "domains_scanned":
+							sessions[i].DomainsScanned = value
+						case "total_open_ports":
+							sessions[i].TotalOpenPorts = value
+						case "assets_with_open_ports":
+							sessions[i].AssetsWithOpenPorts = value
+						case "tech_scans_success":
+							sessions[i].TechScansSuccess = value
+						case "total_breached_emails":
+							sessions[i].TotalBreachedEmails = value
+						case "total_breached_passwords":
+							sessions[i].TotalBreachedPwds = value
+						case "total_breached_hashes":
+							sessions[i].TotalBreachedHashes = value
+						}
+					}
 				} else if change.ChangeType == "new_subdomain" {
 					sessions[i].NewSubdomains++
 				} else if change.ChangeType == "new_port" {
@@ -138,24 +172,73 @@ var historyClientCmd = &cobra.Command{
 		for i, session := range sessions {
 			fmt.Printf("[%d] Scan: %s\n", i+1, session.Timestamp)
 			fmt.Printf("    Type: %s\n", session.Type)
+			fmt.Println()
 
-			if session.NewSubdomains > 0 {
-				fmt.Printf("    ✓ New subdomains: %d\n", session.NewSubdomains)
-			}
-			if session.NewPorts > 0 {
-				fmt.Printf("    ✓ New ports: %d\n", session.NewPorts)
-			}
-			if session.ClosedPorts > 0 {
-				fmt.Printf("    ✗ Closed ports: %d\n", session.ClosedPorts)
-			}
-			if session.Credentials > 0 {
-				fmt.Printf("    ⚠ Credentials: %d\n", session.Credentials)
-			}
-			if session.NewSubdomains == 0 && session.NewPorts == 0 && session.ClosedPorts == 0 && session.Type == "Delta Scan" {
-				fmt.Println("    - No changes detected")
+			if session.Type == "Baseline Scan" {
+				// Display baseline details similar to scan summary
+				if session.TotalSubdomains > 0 || session.DomainsScanned > 0 {
+					fmt.Println("    Subdomain Enumeration:")
+					if session.DomainsScanned > 0 {
+						fmt.Printf("      • Domains scanned: %d\n", session.DomainsScanned)
+					}
+					if session.TotalSubdomains > 0 {
+						fmt.Printf("      • Total subdomains discovered: %d\n", session.TotalSubdomains)
+					}
+					fmt.Println()
+				}
+
+				if session.TotalOpenPorts > 0 || session.AssetsWithOpenPorts > 0 {
+					fmt.Println("    Port Scanning:")
+					if session.AssetsWithOpenPorts > 0 {
+						fmt.Printf("      • Assets with open ports: %d\n", session.AssetsWithOpenPorts)
+					}
+					if session.TotalOpenPorts > 0 {
+						fmt.Printf("      • Total open ports found: %d\n", session.TotalOpenPorts)
+					}
+					fmt.Println()
+				}
+
+				if session.TechScansSuccess > 0 {
+					fmt.Println("    Tech Detection:")
+					fmt.Printf("      • Assets scanned: %d\n", session.TechScansSuccess)
+					fmt.Println()
+				}
+
+				if session.TotalBreachedEmails > 0 || session.TotalBreachedPwds > 0 || session.TotalBreachedHashes > 0 {
+					fmt.Println("    Credential Breach Scanning:")
+					if session.TotalBreachedEmails > 0 {
+						fmt.Printf("      • Breached emails: %d\n", session.TotalBreachedEmails)
+					}
+					if session.TotalBreachedPwds > 0 {
+						fmt.Printf("      • Cleartext passwords: %d\n", session.TotalBreachedPwds)
+					}
+					if session.TotalBreachedHashes > 0 {
+						fmt.Printf("      • Password hashes: %d\n", session.TotalBreachedHashes)
+					}
+					fmt.Println()
+				}
+			} else {
+				// Display delta scan changes
+				if session.NewSubdomains > 0 {
+					fmt.Printf("    ✓ New subdomains: %d\n", session.NewSubdomains)
+				}
+				if session.NewPorts > 0 {
+					fmt.Printf("    ✓ New ports: %d\n", session.NewPorts)
+				}
+				if session.ClosedPorts > 0 {
+					fmt.Printf("    ✗ Closed ports: %d\n", session.ClosedPorts)
+				}
+				if session.Credentials > 0 {
+					fmt.Printf("    ⚠ Credentials: %d\n", session.Credentials)
+				}
+				if session.NewSubdomains == 0 && session.NewPorts == 0 && session.ClosedPorts == 0 {
+					fmt.Println("    - No changes detected")
+				}
+				fmt.Println()
 			}
 
 			if i < len(sessions)-1 {
+				fmt.Println(strings.Repeat("-", 70))
 				fmt.Println()
 			}
 		}
@@ -517,6 +600,60 @@ func compareSubdomainScans(oldData, newData string) {
 			fmt.Printf("  - %s\n", sub)
 		}
 	}
+}
+
+// parseBaselineDescription extracts metrics from baseline change descriptions
+func parseBaselineDescription(changeType, description string) map[string]int {
+	metrics := make(map[string]int)
+
+	// Extract numbers from description using regex
+	re := regexp.MustCompile(`\d+`)
+	numbers := re.FindAllString(description, -1)
+
+	switch changeType {
+	case "baseline_subdomain":
+		// "Baseline subdomain enumeration: X subdomains discovered across Y domains"
+		if len(numbers) >= 2 {
+			if total, err := strconv.Atoi(numbers[0]); err == nil {
+				metrics["total_subdomains"] = total
+			}
+			if domains, err := strconv.Atoi(numbers[1]); err == nil {
+				metrics["domains_scanned"] = domains
+			}
+		}
+	case "baseline_portscan":
+		// "Baseline port scan: X total open ports across Y assets"
+		if len(numbers) >= 2 {
+			if ports, err := strconv.Atoi(numbers[0]); err == nil {
+				metrics["total_open_ports"] = ports
+			}
+			if assets, err := strconv.Atoi(numbers[1]); err == nil {
+				metrics["assets_with_open_ports"] = assets
+			}
+		}
+	case "baseline_tech":
+		// "Baseline tech stack detection: X assets scanned"
+		if len(numbers) >= 1 {
+			if scans, err := strconv.Atoi(numbers[0]); err == nil {
+				metrics["tech_scans_success"] = scans
+			}
+		}
+	case "baseline_credential":
+		// "Baseline credential breach scan: X emails, Y passwords, Z hashes found"
+		if len(numbers) >= 3 {
+			if emails, err := strconv.Atoi(numbers[0]); err == nil {
+				metrics["total_breached_emails"] = emails
+			}
+			if pwds, err := strconv.Atoi(numbers[1]); err == nil {
+				metrics["total_breached_passwords"] = pwds
+			}
+			if hashes, err := strconv.Atoi(numbers[2]); err == nil {
+				metrics["total_breached_hashes"] = hashes
+			}
+		}
+	}
+
+	return metrics
 }
 
 func init() {

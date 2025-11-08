@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -65,6 +66,7 @@ var assetListCmd = &cobra.Command{
 		}
 
 		activeOnly, _ := cmd.Flags().GetBool("active-only")
+		export, _ := cmd.Flags().GetBool("export")
 
 		assets, err := database.ListAssets(clientID, assetType, activeOnly)
 		if err != nil {
@@ -73,10 +75,59 @@ var assetListCmd = &cobra.Command{
 		}
 
 		if len(assets) == 0 {
-			fmt.Println("No assets found")
+			if !export {
+				fmt.Println("No assets found")
+			}
 			return
 		}
 
+		// Export as JSON or display
+		if export {
+			// Get client name if filtering by client
+			clientName := ""
+			if clientID != nil {
+				client, err := database.GetClient(*clientID)
+				if err == nil {
+					clientName = client.Name
+				}
+			}
+
+			// Count assets by type
+			counts := make(map[models.AssetType]int)
+			for _, asset := range assets {
+				counts[asset.AssetType]++
+			}
+
+			output := map[string]interface{}{
+				"total_assets": len(assets),
+				"counts": map[string]interface{}{
+					"domains":    counts[models.AssetTypeDomain],
+					"subdomains": counts[models.AssetTypeSubdomain],
+					"ips":        counts[models.AssetTypeIP],
+				},
+				"assets": assets,
+			}
+
+			if clientName != "" {
+				output["client"] = clientName
+			}
+			if assetTypeFlag != "" {
+				output["filtered_by_type"] = assetTypeFlag
+			}
+			if activeOnly {
+				output["active_only"] = true
+			}
+
+			jsonData, err := json.MarshalIndent(output, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to marshal JSON: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println(string(jsonData))
+			return
+		}
+
+		// Display formatted output
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "ID\tTYPE\tVALUE\tACTIVE\tCREATED")
 		fmt.Fprintln(w, "--\t----\t-----\t------\t-------")
@@ -238,6 +289,7 @@ func init() {
 	assetListCmd.Flags().Int64("client-id", 0, "Filter by client ID")
 	assetListCmd.Flags().String("type", "", "Filter by asset type")
 	assetListCmd.Flags().Bool("active-only", false, "Show only active assets")
+	assetListCmd.Flags().Bool("export", false, "Export assets as JSON")
 
 	assetImportCmd.Flags().Bool("skip-duplicates", false, "Skip duplicate assets")
 
